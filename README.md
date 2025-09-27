@@ -48,7 +48,6 @@ A powerful, open-source configuration tool for Elgato Stream Deck devices, offer
     ```bash
     pip install -r requirements.txt
     ```
-    *(Note: A `requirements.txt` file would need to be created for this step)*
 
 #### Windows Specific Setup: `hidapi.dll`
 
