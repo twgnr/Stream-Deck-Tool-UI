@@ -1,0 +1,15 @@
+streamdeck
+ttkbootstrap
+Pillow
+tkinterdnd2-universal
+pystray
+psutil
+pygetwindow
+pynput
+requests
+pycaw
+watchdog
+screeninfo
+matplotlib
+pynvml
+pywin32
