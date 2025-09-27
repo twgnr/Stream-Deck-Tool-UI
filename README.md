@@ -40,7 +40,7 @@ A powerful, open-source configuration tool for Elgato Stream Deck devices, offer
 
 1.  Clone the repository:
     ```bash
-    git clone [https://github.com/twgnr/Stream-Deck-Tool-UI.git](https://github.com/twgnr/Stream-Deck-Tool-UI.git)
+    git clone https://github.com/twgnr/Stream-Deck-Tool-UI.git
     cd Stream-Deck-Tool-UI
     ```
 
