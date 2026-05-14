@@ -1,6 +1,7 @@
 #--------------------------------------------------------------------
 # Import packages
 #--------------------------------------------------------------------
+import os
 import threading
 import time
 import psutil
@@ -54,7 +55,9 @@ def updater_loop(driver_instances):
             now = time.time()
             
             for driver in driver_instances:
-                active_keys = list(driver.active_dynamic_keys)
+                with driver.state_lock:
+                    active_keys = list(driver.active_dynamic_keys)
+                    current_layer = driver.current_layer
 
                 for key_index, key_config in active_keys:
                     if shutdown_event.is_set():
@@ -64,7 +67,8 @@ def updater_loop(driver_instances):
                     display_type = display_config.get("type")
 
                     if display_type == "animated":
-                        icon_path = key_config.get("icon")
+                        icon_name = key_config.get("icon", "")
+                        icon_path = os.path.join(driver.icon_folder, icon_name) if icon_name else ""
                         if icon_path in driver.gif_cache:
                             gif = driver.gif_cache[icon_path]
                             
@@ -91,7 +95,7 @@ def updater_loop(driver_instances):
                                     dta = provider_func(**options)
                                     label_text = dta.get("text", "Error")
                                     
-                                    cache_key = (driver.deck_id, driver.current_layer, key_index)
+                                    cache_key = (driver.deck_id, current_layer, key_index)
                                     UI_DATA_CACHE[cache_key] = label_text
 
                                     font_settings = key_config.get("font_settings", {})
@@ -128,7 +132,7 @@ def updater_loop(driver_instances):
 
         except Exception as e:
             log.error(f"Error in dynamic key updater thread: {e}")
-            time.sleep(5)
+            shutdown_event.wait(5)
 
     log.info("Updater loop is shutting down...")
     gpu_monitor.shutdown()
@@ -185,7 +189,7 @@ def dynamic_key_update_loop(driver):
                         driver.deck.set_key_image(key_index, image)
                         driver.dynamic_key_last_updates[key_index] = current_time
                     except Exception as e:
-                        if key_index in UI_DATA_CACHE:
+                        if cache_key in UI_DATA_CACHE:
                             del UI_DATA_CACHE[cache_key]
                         print(f"Error updating dynamic key {key_index} with provider '{provider_name}': {e}")
 

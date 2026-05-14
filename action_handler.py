@@ -102,16 +102,18 @@ class ClipboardManager:
         self.trigger_key_info = None
 
 
+    @staticmethod
     def set_clipboard(text):
         try:
             win32clipboard.OpenClipboard()
-            win32clipboard.EmptyClipboard() 
-            win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(text or "", win32clipboard.CF_UNICODETEXT)
         finally:
             win32clipboard.CloseClipboard()
 
 
-    def get_clipboard(self):
+    @staticmethod
+    def get_clipboard():
         txt = None
         try:
             win32clipboard.OpenClipboard()
@@ -164,8 +166,9 @@ class ClipboardManager:
         self.current_index = 0
         
         UI_CMD_QUEUE.put({'command': 'show_cycle_window', 'items': self.items})
-        
+
         self.timeout_timer = threading.Timer(3.0, self._commit)
+        self.timeout_timer.daemon = True
         self.timeout_timer.start()
 
 
@@ -181,6 +184,7 @@ class ClipboardManager:
         UI_CMD_QUEUE.put({'command': 'update_cycle_selection', 'index': self.current_index})
 
         self.timeout_timer = threading.Timer(3.0, self._commit)
+        self.timeout_timer.daemon = True
         self.timeout_timer.start()
 
 
@@ -245,6 +249,7 @@ class CommandCycleManager:
         
         # Start the two second timeout
         self.timeout_timer = threading.Timer(2.0, self._commit)
+        self.timeout_timer.daemon = True
         self.timeout_timer.start()
 
 
@@ -259,11 +264,12 @@ class CommandCycleManager:
 
         # next item
         self.current_index = (self.current_index + 1) % len(self.items)
-        
+
         # Command the UI thread to update the selection highlight
         UI_CMD_QUEUE.put({'command': 'update_cycle_selection', 'index': self.current_index})
 
         self.timeout_timer = threading.Timer(2.0, self._commit)
+        self.timeout_timer.daemon = True
         self.timeout_timer.start()
 
 
@@ -612,7 +618,7 @@ def execute_insert_text(payload):
     """        
     original_clipboard = ""
     try:
-        original_clipboard = ClipboardManager().get_clipboard()
+        original_clipboard = ClipboardManager.get_clipboard()
         content = str(payload or "")
         ClipboardManager.set_clipboard(content)
         time.sleep(0.1)

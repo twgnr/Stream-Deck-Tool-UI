@@ -48,7 +48,12 @@ class DeckDriver:
         self.key_hold_triggered = set()
         self.toggled_keys = set()
         self.timed_toggles = {}
-        
+
+        # Protects shared state (config, gif_cache, active_dynamic_keys, current_layer)
+        # against the watchdog hot-reloader, the dynamic-key updater thread, and
+        # the deck's own key-callback thread.
+        self.state_lock = threading.RLock()
+
         self._update_settings()
 
 
@@ -77,6 +82,7 @@ class DeckDriver:
 
             # Start timer to check for a hold status
             timer = threading.Timer(self.hold_duration, self._trigger_hold_action, args=[key, hold_action_config])
+            timer.daemon = True
             self.key_press_timers[key] = timer
             timer.start()
 
@@ -132,8 +138,6 @@ class DeckDriver:
         payload = key_config.get("payload")
         error = None
 
-        deck_info = {"deck_id": self.deck_id, "key_index": key_index}
-
         if action_type == "toggle_key":
             state_key = (self.deck.id(), key_index)
             # If the key is already on, turn it off
@@ -178,7 +182,7 @@ class DeckDriver:
                     error = execute_action("hotkey", key)
 
             new_timer = threading.Timer(2.0, self._deactivate_timed_toggle, args=[state_key, hold_key])
-            
+            new_timer.daemon = True
             self.timed_toggles[state_key] = new_timer
             new_timer.start()
 
@@ -317,33 +321,37 @@ class DeckDriver:
             self.draw_layer(new_layer)
 
     def draw_layer(self, layer_name):
-        if layer_name not in self.config:
-            self.log.warning(f"Layer '{layer_name}' no longer exists. Switching to main layer.")
-            layer_name = "main"
+        with self.state_lock:
+            if layer_name not in self.config:
+                self.log.warning(f"Layer '{layer_name}' no longer exists. Switching to main layer.")
+                layer_name = "main"
 
-        self.log.info(f"Switching to layer: '{layer_name}'")
-        self.current_layer = layer_name
-        self.active_dynamic_keys.clear()
-        self.dynamic_key_last_updates.clear()
-        layer_config = self.config.get(layer_name, {})
+            self.log.info(f"Switching to layer: '{layer_name}'")
+            self.current_layer = layer_name
+            self.active_dynamic_keys.clear()
+            self.dynamic_key_last_updates.clear()
+            layer_config = self.config.get(layer_name, {})
 
-        for key_index in range(self.deck.key_count()):
-            key_config = layer_config.get(str(key_index))
-            self.update_key_visuals(key_index)
+            for key_index in range(self.deck.key_count()):
+                key_config = layer_config.get(str(key_index))
+                self.update_key_visuals(key_index)
 
-            if key_config:
-                display_config = key_config.get("display")
-                if display_config:
-                    display_type = display_config.get("type")
-                    if display_type == "animated" and key_config.get("icon", "").endswith(".gif"):
-                        icon_path = os.path.join(self.icon_folder, key_config["icon"])
-                        self._load_gif(icon_path)
-                        self.active_dynamic_keys.append((key_index, key_config))
-                    elif display_type == "dynamic":
-                        self.active_dynamic_keys.append((key_index, key_config))
+                if key_config:
+                    display_config = key_config.get("display")
+                    if display_config:
+                        display_type = display_config.get("type")
+                        if display_type == "animated" and key_config.get("icon", "").endswith(".gif"):
+                            icon_path = os.path.join(self.icon_folder, key_config["icon"])
+                            self._load_gif(icon_path)
+                            self.active_dynamic_keys.append((key_index, key_config))
+                        elif display_type == "dynamic":
+                            self.active_dynamic_keys.append((key_index, key_config))
+
+            history_snapshot = self.layer_history.copy()
+            current_layer = self.current_layer
 
         if self.layer_change_callback:
-            self.layer_change_callback(self.deck_id, self.current_layer, self.layer_history.copy())
+            self.layer_change_callback(self.deck_id, current_layer, history_snapshot)
 
 
     def update_key_visuals(self, key_index):
@@ -361,13 +369,15 @@ class DeckDriver:
         label_pos = key_config.get("label_pos", "bottom")
 
         if action_type == "toggle_state":
-            state_index = self.key_states.get((self.current_layer, key_index), 0)
-            state_config = key_config.get("payload", [])[state_index]
-            icon_name = state_config.get("icon", icon_name)
-            label_text = state_config.get("label", label_text)
-            label_pos = state_config.get("label_pos", label_pos)
-            font_color = state_config.get("font_color", font_color)
-            font_settings = state_config.get("font_settings", font_settings)
+            states = key_config.get("payload", [])
+            if isinstance(states, list) and states:
+                state_index = self.key_states.get((self.current_layer, key_index), 0) % len(states)
+                state_config = states[state_index]
+                icon_name = state_config.get("icon", icon_name)
+                label_text = state_config.get("label", label_text)
+                label_pos = state_config.get("label_pos", label_pos)
+                font_color = state_config.get("font_color", font_color)
+                font_settings = state_config.get("font_settings", font_settings)
 
         background_color = key_config.get("background", "#2A446F")
         is_layer_key = (action_type == "layer")
@@ -409,15 +419,18 @@ class DeckDriver:
     def reload_config(self):
         self.log.info(f"Hot-reloading configuration for deck {self.deck_id}...")
         try:
-            self.full_config = load_config()
-            setup_logging(self.full_config)
-            self.config = self.full_config.setdefault(self.deck_id, {"main": {}})
-            self._update_settings()
+            new_full_config = load_config()
+            setup_logging(new_full_config)
+            with self.state_lock:
+                self.full_config = new_full_config
+                self.config = self.full_config.setdefault(self.deck_id, {"main": {}})
+                self._update_settings()
+                current_layer = self.current_layer
 
             if self.ui_refresh_callback:
                 self.ui_refresh_callback(self.full_config)
 
-            self.draw_layer(self.current_layer)
+            self.draw_layer(current_layer)
             self.log.info(f"Configuration for deck {self.deck_id} reloaded successfully.")
         except Exception as e:
             self.log.error(f"Error during hot-reload: {e}")
@@ -428,6 +441,7 @@ class DeckDriver:
         error_image = render_error_key(self.deck)
         self.deck.set_key_image(key_index, error_image)
         revert_timer = threading.Timer(2.0, self.update_key_visuals, args=[key_index])
+        revert_timer.daemon = True
         revert_timer.start()
 
 

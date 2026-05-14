@@ -961,7 +961,7 @@ class StreamDeckConfigurator(tb.Window, TkinterDnD.Tk):
         action_type = key_cfg_dict.get("action_type")
 
         is_active_toggle = False
-        if action_type == ["toggle_key", "toggle_key_timer"]:
+        if action_type in ("toggle_key", "toggle_key_timer"):
             active_driver = self.active_driver
             if active_driver:
                 state_key = (active_driver.deck.id(), key_index)
