@@ -101,7 +101,11 @@ class GpuMonitor:
 
     def shutdown(self):
         if PYNVML_AVAILABLE and self.handle:
-            pynvml.nvmlShutdown()
+            try:
+                pynvml.nvmlShutdown()
+            except pynvml.NVMLError:
+                pass
+            self.handle = None
 
 # --- Provider Registration ---
 # Instantiate stateful monitors

@@ -58,6 +58,7 @@ def profile_monitor_loop(driver_instances):
 
     while not shutdown_event.is_set():
         current_active_process = None
+        active_window = None
         try:
             active_window = gw.getActiveWindow()
             if active_window and sys.platform == "win32" and active_window.title:
@@ -65,6 +66,7 @@ def profile_monitor_loop(driver_instances):
                 current_active_process = psutil.Process(pid).name().lower()
         except (psutil.NoSuchProcess, psutil.AccessDenied, gw.PyGetWindowException, AttributeError):
             current_active_process = None
+            active_window = None
         
         if current_active_process != last_active_process:
             last_active_process = current_active_process
@@ -80,7 +82,7 @@ def profile_monitor_loop(driver_instances):
                 found_layer = profiles_lower.get(current_active_process)
 
                 # If exe not found, check if any profile matches part of the window title.
-                if not found_layer and active_window:
+                if not found_layer and active_window and active_window.title:
                     found_layer = next((v for k, v in profiles_lower.items() if k in active_window.title.lower()), None)
 
 

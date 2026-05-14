@@ -101,7 +101,10 @@ class MacroRecorderWindow(tk.Toplevel):
         self._add_delay()
         self.recorded_actions.append({"action_type": "key_release", "payload": self._get_key_name(key)})
         if key == keyboard.Key.esc:
-            self.stop_recording()
+            # Marshal to the Tk main thread; calling destroy() from the pynput
+            # listener thread crashes Tkinter, and stopping the listener from
+            # within its own callback deadlocks pynput.
+            self.after(0, self.stop_recording)
 
 
     def on_click(self, x, y, button, pressed):

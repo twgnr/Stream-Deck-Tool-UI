@@ -709,7 +709,7 @@ class KeyConfigWindow(tk.Toplevel):
 
             if isinstance(payload, dict):
                 self.layer_payload_var.set(payload.get("target", ""))
-                sec_action = payload.get("second_action", {})
+                sec_action = payload.get("secondary_action", {})
                 if sec_action:
                     self.second_action_enabled_var.set(True)
                     self.second_action_type_var.set(sec_action.get("action_type", ""))
@@ -995,7 +995,7 @@ class KeyConfigWindow(tk.Toplevel):
             if options_str:
                 try:
                     # Parse simple key=value pairs separated by commas
-                    options_dict = dict(item.strip().split("=") for item in options_str.split(","))
+                    options_dict = dict(item.strip().split("=", 1) for item in options_str.split(",") if "=" in item)
                     display_dict["provider_options"] = options_dict
                 except ValueError:
                     messagebox.showwarning("Warning", "Provider Options format is invalid. Use key=value, another=value2.")
