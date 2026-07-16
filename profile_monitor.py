@@ -41,19 +41,21 @@ def is_sub_layer(config_dta, child_layer, god_layer):
     return False #Error 
 
 
-def profile_monitor_loop(driver_instances):
+def profile_monitor_loop(driver_instances, shutdown_event=None):
     """
     Monitors the active window and switches layers only when the focused application changes,
-    respecting sub-layers of a context profile.
+    respecting sub-layers of a context profile. `driver_instances` may be a shared list
+    that is mutated at runtime when decks are plugged in or unplugged.
     """
     if not CONTEXT_AWARE_ENABLED:
         log.warning("Context-aware dependencies not installed. Profile monitor disabled.")
         return
 
-    if not driver_instances:
-        return
+    if shutdown_event is None:
+        if not driver_instances:
+            return
+        shutdown_event = driver_instances[0].shutdown_event
 
-    shutdown_event = driver_instances[0].shutdown_event
     last_active_process = None
 
     while not shutdown_event.is_set():
@@ -71,7 +73,7 @@ def profile_monitor_loop(driver_instances):
         if current_active_process != last_active_process:
             last_active_process = current_active_process
 
-            for driver in driver_instances:
+            for driver in list(driver_instances):
                 profile_config = driver.config.get("context_aware_profiles", {})
                 if not profile_config.get("enabled", False):
                     continue
