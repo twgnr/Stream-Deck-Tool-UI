@@ -39,22 +39,23 @@ DATA_PROVIDERS = {
 UI_DATA_CACHE = {}
 
 
-def updater_loop(driver_instances):
+def updater_loop(driver_instances, shutdown_event=None):
     """
     The main loop that runs in a background thread to update dynamic and animated keys
-    across ALL connected Stream Decks.
+    across ALL connected Stream Decks. `driver_instances` may be a shared list that
+    is mutated at runtime when decks are plugged in or unplugged.
     """
-    if not driver_instances:
-        log.warning("Dynamic key updater started with no drivers.")
-        return
-
-    shutdown_event = driver_instances[0].shutdown_event
+    if shutdown_event is None:
+        if not driver_instances:
+            log.warning("Dynamic key updater started with no drivers.")
+            return
+        shutdown_event = driver_instances[0].shutdown_event
 
     while not shutdown_event.is_set():
         try:
             now = time.time()
-            
-            for driver in driver_instances:
+
+            for driver in list(driver_instances):
                 with driver.state_lock:
                     active_keys = list(driver.active_dynamic_keys)
                     current_layer = driver.current_layer
@@ -138,11 +139,11 @@ def updater_loop(driver_instances):
     gpu_monitor.shutdown()
 
 
-def start_dynamic_key_updater(driver_instances):
+def start_dynamic_key_updater(driver_instances, shutdown_event=None):
     """Starts the background thread to update dynamic keys."""
     if not isinstance(driver_instances, list):
         driver_instances = [driver_instances]
-    update_thread = threading.Thread(target=updater_loop, args=(driver_instances,), daemon=True)
+    update_thread = threading.Thread(target=updater_loop, args=(driver_instances, shutdown_event), daemon=True)
     update_thread.start()
 
 

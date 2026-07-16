@@ -20,6 +20,7 @@ A powerful, open-source configuration tool for Elgato Stream Deck devices, offer
 * **Layers and Profiles:** Create different layers of keys and switch between them. Set up profiles that automatically activate when specific applications are in focus.
 * **Customizable Appearance:** Tailor the look of your keys with custom icons, labels, fonts, and background colors.
 * **Hot-Reloading:** Configuration changes are automatically detected and applied without needing to restart the application.
+* **Automatic Device Detection:** Stream Decks that are unplugged and replugged (or connected after startup) are detected and reconnected automatically — no application restart required.
 * **Macro Recorder:** Record mouse and keyboard actions to create complex macros.
 
 ## Advanced Functionality

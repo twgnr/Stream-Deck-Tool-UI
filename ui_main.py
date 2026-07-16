@@ -107,8 +107,13 @@ class StreamDeckConfigurator(tb.Window, TkinterDnD.Tk):
 
         self.shutdown_event = threading.Event()
         self.drivers = {}
+        # Shared, mutable driver list: background services iterate this list live,
+        # so decks added/removed at runtime are picked up without a restart.
+        self.all_drivers_list = []
         self.active_deck_id = None
         self.reloader_observer = None
+        self._profile_monitor_started = False
+        self._dynamic_updater_started = False
         
         self.full_config_dta = load_config()
         setup_logging(self.full_config_dta)
@@ -376,6 +381,7 @@ class StreamDeckConfigurator(tb.Window, TkinterDnD.Tk):
             self.deck_selector.set("No Device (Default)")
             self._populate_layers_tree()
             self.draw_layer("main", nav_type="initial")
+            self._start_device_watcher()
             return
 
         deck_names = []
@@ -401,6 +407,7 @@ class StreamDeckConfigurator(tb.Window, TkinterDnD.Tk):
                 ui_visual_refresh_callback=self.refresh_all_button_visuals
             )
             self.drivers[deck_id] = driver
+            self.all_drivers_list.append(driver)
 
             deck.set_key_callback(driver.key_change_callback)
             driver.draw_layer("main")
@@ -412,24 +419,76 @@ class StreamDeckConfigurator(tb.Window, TkinterDnD.Tk):
             self.deck_selector.set(deck_names[0])
             self.on_deck_selected()
 
-        all_drivers_list = list(self.drivers.values())
+        self._ensure_background_services()
 
-        any_deck_has_context_aware = any(
-            d.config.get("context_aware_profiles", {}).get("enabled", False) for d in all_drivers_list
-        )
-        if CONTEXT_AWARE_ENABLED and any_deck_has_context_aware:
-            threading.Thread(target=profile_monitor_loop, args=(all_drivers_list,), daemon=True).start()
-            self.log.info("Context-aware profile monitor started for all devices.")
-
-        any_deck_has_hot_reload = any(
-            d.config.get("settings", {}).get("hot_reload_enabled", False) for d in all_drivers_list
-        )
-        if any_deck_has_hot_reload:
-            self.reloader_observer = start_reloader(all_drivers_list)
-            
-        start_dynamic_key_updater(all_drivers_list)
-        
         self.log.info(f"Stream Deck drivers are running for {len(self.drivers)} device(s).")
+        self._start_device_watcher()
+
+
+    def _ensure_background_services(self):
+        """Starts global background services once. They operate on the shared
+        driver list, so decks connected later are served without a restart."""
+        if not self.all_drivers_list:
+            return
+
+        if not self._profile_monitor_started:
+            any_deck_has_context_aware = any(
+                d.config.get("context_aware_profiles", {}).get("enabled", False) for d in self.all_drivers_list
+            )
+            if CONTEXT_AWARE_ENABLED and any_deck_has_context_aware:
+                threading.Thread(target=profile_monitor_loop, args=(self.all_drivers_list, self.shutdown_event), daemon=True).start()
+                self._profile_monitor_started = True
+                self.log.info("Context-aware profile monitor started for all devices.")
+
+        if self.reloader_observer is None:
+            any_deck_has_hot_reload = any(
+                d.config.get("settings", {}).get("hot_reload_enabled", False) for d in self.all_drivers_list
+            )
+            if any_deck_has_hot_reload:
+                self.reloader_observer = start_reloader(self.all_drivers_list)
+
+        if not self._dynamic_updater_started:
+            start_dynamic_key_updater(self.all_drivers_list, self.shutdown_event)
+            self._dynamic_updater_started = True
+
+
+    def _start_device_watcher(self):
+        """Starts the background thread that auto-detects unplugged/replugged decks."""
+        threading.Thread(target=self._device_watcher_loop, daemon=True).start()
+
+
+    def _device_watcher_loop(self):
+        """Periodically checks device connectivity and schedules an automatic
+        rescan on the UI thread when a deck is plugged in or unplugged."""
+        self.log.info("Automatic device detection started.")
+        while not self.shutdown_event.wait(3):
+            try:
+                change_detected = False
+
+                # A stale handle means the deck was unplugged. This also catches a
+                # replugged deck that re-enumerates under the same device ID.
+                for driver in list(self.drivers.values()):
+                    try:
+                        if not driver.deck.connected():
+                            change_detected = True
+                            break
+                    except Exception:
+                        change_detected = True
+                        break
+
+                if not change_detected:
+                    found_ids = {d.id() for d in DeviceManager().enumerate()}
+                    if found_ids != set(self.drivers.keys()):
+                        change_detected = True
+
+                if change_detected:
+                    self.log.info("Device change detected. Triggering automatic rescan.")
+                    self.after(0, lambda: self.rescan_devices(silent=True))
+                    # Give the rescan time to run before checking again
+                    self.shutdown_event.wait(3)
+            except Exception as e:
+                self.log.error(f"Error in device watcher: {e}")
+        self.log.info("Device watcher shutting down.")
 
 
     def on_driver_layer_change(self, deck_id, new_layer_name, new_layer_history):
@@ -623,33 +682,52 @@ class StreamDeckConfigurator(tb.Window, TkinterDnD.Tk):
     #     self.exit_app()
 
 
-    def rescan_devices(self, icon=None, item=None):
+    def rescan_devices(self, icon=None, item=None, silent=False):
         """Scans for newly connected or disconnected Stream Decks and updates drivers."""
         self.log.info("Re-scanning for Stream Deck devices...")
-        
-        new_decks_list = DeviceManager().enumerate()
-        new_deck_ids = {d.id() for d in new_decks_list}
-        current_driver_ids = set(self.drivers.keys())
 
-        # Shut down drivers for disconnected decks
-        disconnected_ids = current_driver_ids - new_deck_ids
-        for deck_id in disconnected_ids:
+        try:
+            new_decks_list = DeviceManager().enumerate()
+        except Exception as e:
+            self.log.error(f"Device enumeration failed: {e}")
+            return
+
+        new_deck_ids = {d.id() for d in new_decks_list}
+
+        # Shut down drivers for decks that disappeared or whose handle went stale.
+        # A replugged deck usually re-enumerates under the SAME ID, so the ID
+        # comparison alone is not enough - the old handle must also be checked.
+        disconnected_ids = []
+        for deck_id, driver in list(self.drivers.items()):
+            still_alive = deck_id in new_deck_ids
+            if still_alive:
+                try:
+                    still_alive = driver.deck.connected()
+                except Exception:
+                    still_alive = False
+            if still_alive:
+                continue
+
             self.log.info(f"Stream Deck disconnected: {deck_id}. Shutting down its driver.")
+            disconnected_ids.append(deck_id)
+            self.drivers.pop(deck_id)
+            if driver in self.all_drivers_list:
+                self.all_drivers_list.remove(driver)
             try:
-                driver = self.drivers.pop(deck_id)
                 driver.deck.reset()
                 driver.deck.close()
             except Exception as e:
-                self.log.error(f"Error while closing disconnected deck {deck_id}: {e}")
+                self.log.warning(f"Cleanup of disconnected deck {deck_id} failed (device likely already gone): {e}")
 
         # Start drivers for connected decks
-        newly_connected_decks = [d for d in new_decks_list if d.id() not in current_driver_ids]
+        newly_connected_decks = [d for d in new_decks_list if d.id() not in self.drivers]
         for deck in newly_connected_decks:
             deck_id = deck.id()
             self.log.info(f"New Stream Deck detected: {deck.deck_type()} ({deck_id}). Starting driver.")
             try:
                 deck.open()
                 deck.reset()
+                deck.set_brightness(30)
 
                 # Initialize the new driver with all necessary callbacks
                 driver = DeckDriver(
@@ -661,18 +739,22 @@ class StreamDeckConfigurator(tb.Window, TkinterDnD.Tk):
                     ui_visual_refresh_callback=self.refresh_all_button_visuals
                 )
                 self.drivers[deck_id] = driver
+                self.all_drivers_list.append(driver)
                 deck.set_key_callback(driver.key_change_callback)
                 driver.draw_layer("main")
             except Exception as e:
+                # The device may not be ready right after replugging;
+                # the device watcher will retry on its next cycle.
                 self.log.error(f"Error initializing new deck {deck_id}: {e}")
-        
+
         # Update the UI dropdown
         self._update_deck_selector()
+        self._ensure_background_services()
 
-        if disconnected_ids or newly_connected_decks:
+        if not silent and (disconnected_ids or newly_connected_decks):
             Messagebox.show_info(
                 title="Devices Refreshed",
-                message="Device list updated. A restart may be needed for background services like the Profile Monitor to fully include new devices.",
+                message="Device list updated.",
                 parent=self
             )
 

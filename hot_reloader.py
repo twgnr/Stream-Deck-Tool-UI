@@ -30,7 +30,8 @@ class ConfigChangeHandler(FileSystemEventHandler):
             if current_time - self.last_triggered > 1:
                 self.last_triggered = current_time
                 self.log.info(f"Detected change in '{CONFIG_FILE}'. Triggering hot-reload.")
-                for driver in self.drivers:
+                # Copy: the shared driver list may be mutated on device hot-plug
+                for driver in list(self.drivers):
                     driver.reload_config()
 
 
