@@ -29,7 +29,10 @@ if not log.handlers:
 
 def get_base_path():
     """Gets the base path for the application, working for both script and frozen exe."""
-    if getattr(sys, 'frozen', False):
+    if "__compiled__" in globals():
+        # If compiled with Nuitka (onefile: folder of the .exe, not the temp unpack folder)
+        return __compiled__.containing_dir
+    elif getattr(sys, 'frozen', False):
         # If the application is run as a bundle (PyInstaller)
         return os.path.dirname(sys.executable)
     else:

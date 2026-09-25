@@ -1,7 +1,7 @@
 streamdeck
-ttkbootstrap
+ttkbootstrap<1.15
 Pillow
-tkinterdnd2-universal
+tkinterdnd2
 pystray
 psutil
 pygetwindow

@@ -2,3 +2,10 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Nuitka build
+.venv-build/
+build/
+*.build/
+*.dist/
+*.onefile-build/
